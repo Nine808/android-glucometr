@@ -1,7 +1,11 @@
 package com.example.myoneproject
 
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
@@ -13,6 +17,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.util.Log
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +29,7 @@ import java.util.UUID
 class MainActivity : AppCompatActivity() {
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private lateinit var bleScanner: BluetoothLeScanner
+    private lateinit var statusText: TextView
     private val enableBluetoothLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == RESULT_OK) {
@@ -37,6 +43,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContentView(R.layout.activity_main)
+
+        statusText = findViewById(R.id.statusText)
 
         if (!packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
             Toast.makeText(this, "BLE не поддерживается", Toast.LENGTH_SHORT).show()
@@ -62,13 +70,26 @@ class MainActivity : AppCompatActivity() {
         enableBluetoothLauncher.launch(enableBtIntent)
     }
 
+    private var cgmDevice: BluetoothDevice? = null
+
     private val scanCallback = object : ScanCallback() {
+
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            Log.d("BLE", "Найдено устройство: ${device.name} ${device.address}")
+            Log.d("BLE", "Найдено: ${device.name} ${device.address}")
+
+            cgmDevice = device
+            bleScanner.stopScan(this)
+            connectToDevice()
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            Log.d("BLE", "Scan failed: $errorCode")
         }
     }
     private fun startScan() {
+
+        Log.d("BLE", ">>> startScan вызван")
 
         if (!bluetoothAdapter.isEnabled) {
             enableBluetooth()
@@ -77,29 +98,15 @@ class MainActivity : AppCompatActivity() {
 
         if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN)
             != PackageManager.PERMISSION_GRANTED) {
+            Log.d("BLE", "Нет BLUETOOTH_SCAN")
             return
         }
 
         bleScanner = bluetoothAdapter.bluetoothLeScanner
 
-        if (bleScanner == null) {
-            Toast.makeText(this, "Scanner недоступен", Toast.LENGTH_SHORT).show()
-            return
-        }
+        Log.d("BLE", "Scanner = $bleScanner")
 
-        val filter = ScanFilter.Builder()
-            .setServiceUuid(
-                ParcelUuid(
-                    UUID.fromString("0000181F-0000-1000-8000-00805F9B34FB")
-                )
-            )
-            .build()
-
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
-        bleScanner.startScan(listOf(filter), settings, scanCallback)
+        bleScanner.startScan(scanCallback)
 
         Log.d("BLE", "Сканирование запущено")
     }
@@ -107,7 +114,8 @@ class MainActivity : AppCompatActivity() {
         requestPermissions(
             arrayOf(
                 android.Manifest.permission.BLUETOOTH_SCAN,
-                android.Manifest.permission.BLUETOOTH_CONNECT
+                android.Manifest.permission.BLUETOOTH_CONNECT,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
             ),
             100
         )
@@ -133,4 +141,62 @@ class MainActivity : AppCompatActivity() {
             startScan()
         }
     }
+
+    private var bluetoothGatt: BluetoothGatt? = null
+
+    private fun connectToDevice() {
+
+        if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+            != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+
+        cgmDevice?.let { device ->
+            bluetoothGatt = device.connectGatt(this, false, gattCallback)
+        }
+    }
+    private val gattCallback = object : BluetoothGattCallback() {
+
+        override fun onConnectionStateChange(
+            gatt: BluetoothGatt,
+            status: Int,
+            newState: Int
+        ) {
+
+            Log.d("BLE", "status=$status newState=$newState")
+
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.d("BLE", "Ошибка подключения, статус = $status")
+                runOnUiThread {
+                    statusText.text = "Ошибка подключения: $status"
+                }
+                gatt.close()
+                return
+            }
+
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+
+                Log.d("BLE", "Подключено к CGM")
+
+                runOnUiThread {
+                    statusText.text = "Подключено к CGM"
+                }
+
+                gatt.discoverServices()
+
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+
+                Log.d("BLE", "Отключено")
+
+                runOnUiThread {
+                    statusText.text = "Отключено"
+                }
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            Log.d("BLE", "Сервисы обнаружены")
+        }
+    }
+
 }
