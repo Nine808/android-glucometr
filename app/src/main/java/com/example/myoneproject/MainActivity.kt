@@ -76,127 +76,156 @@ class MainActivity : AppCompatActivity() {
 
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            Log.d("BLE", "Найдено: ${device.name} ${device.address}")
+            val name = device.name ?: return
 
-            cgmDevice = device
-            bleScanner.stopScan(this)
-            connectToDevice()
+            Log.d("BLE", "Найдено: $name ${device.address}")
+
+            if (name.contains("MyCGM")) {
+                Log.d("BLE", "Это наш CGM!")
+                cgmDevice = device
+                bleScanner.stopScan(this)
+                connectToDevice()
+            }
         }
 
         override fun onScanFailed(errorCode: Int) {
             Log.d("BLE", "Scan failed: $errorCode")
         }
     }
-    private fun startScan() {
 
-        Log.d("BLE", ">>> startScan вызван")
+        private fun startScan() {
 
-        if (!bluetoothAdapter.isEnabled) {
-            enableBluetooth()
-            return
-        }
+            Log.d("BLE", ">>> startScan вызван")
 
-        if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN)
-            != PackageManager.PERMISSION_GRANTED) {
-            Log.d("BLE", "Нет BLUETOOTH_SCAN")
-            return
-        }
-
-        bleScanner = bluetoothAdapter.bluetoothLeScanner
-
-        Log.d("BLE", "Scanner = $bleScanner")
-
-        bleScanner.startScan(scanCallback)
-
-        Log.d("BLE", "Сканирование запущено")
-    }
-    private fun requestBlePermissions() {
-        requestPermissions(
-            arrayOf(
-                android.Manifest.permission.BLUETOOTH_SCAN,
-                android.Manifest.permission.BLUETOOTH_CONNECT,
-                android.Manifest.permission.ACCESS_FINE_LOCATION
-            ),
-            100
-        )
-    }
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-
-        if (requestCode == 100) {
-            if (grantResults.isNotEmpty() &&
-                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                startScan()
-            }
-        }
-    }
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-
-        if (requestCode == 200 && resultCode == RESULT_OK) {
-            startScan()
-        }
-    }
-
-    private var bluetoothGatt: BluetoothGatt? = null
-
-    private fun connectToDevice() {
-
-        if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
-            != PackageManager.PERMISSION_GRANTED) {
-            return
-        }
-
-        cgmDevice?.let { device ->
-            bluetoothGatt = device.connectGatt(this, false, gattCallback)
-        }
-    }
-    private val gattCallback = object : BluetoothGattCallback() {
-
-        override fun onConnectionStateChange(
-            gatt: BluetoothGatt,
-            status: Int,
-            newState: Int
-        ) {
-
-            Log.d("BLE", "status=$status newState=$newState")
-
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.d("BLE", "Ошибка подключения, статус = $status")
-                runOnUiThread {
-                    statusText.text = "Ошибка подключения: $status"
-                }
-                gatt.close()
+            if (!bluetoothAdapter.isEnabled) {
+                enableBluetooth()
                 return
             }
 
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
+            if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                Log.d("BLE", "Нет BLUETOOTH_SCAN")
+                return
+            }
 
-                Log.d("BLE", "Подключено к CGM")
+            bleScanner = bluetoothAdapter.bluetoothLeScanner
 
-                runOnUiThread {
-                    statusText.text = "Подключено к CGM"
-                }
+            Log.d("BLE", "Scanner = $bleScanner")
 
-                gatt.discoverServices()
+            bleScanner.startScan(scanCallback)
 
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+            Log.d("BLE", "Сканирование запущено")
+        }
 
-                Log.d("BLE", "Отключено")
+        private fun requestBlePermissions() {
+            requestPermissions(
+                arrayOf(
+                    android.Manifest.permission.BLUETOOTH_SCAN,
+                    android.Manifest.permission.BLUETOOTH_CONNECT,
+                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                ),
+                100
+            )
+        }
 
-                runOnUiThread {
-                    statusText.text = "Отключено"
+        override fun onRequestPermissionsResult(
+            requestCode: Int,
+            permissions: Array<out String>,
+            grantResults: IntArray
+        ) {
+            super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+            if (requestCode == 100) {
+                if (grantResults.isNotEmpty() &&
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED
+                ) {
+                    startScan()
                 }
             }
         }
 
-        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            Log.d("BLE", "Сервисы обнаружены")
+        override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+            super.onActivityResult(requestCode, resultCode, data)
+
+            if (requestCode == 200 && resultCode == RESULT_OK) {
+                startScan()
+            }
+        }
+
+        private var bluetoothGatt: BluetoothGatt? = null
+
+        private fun connectToDevice() {
+
+            if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+
+            cgmDevice?.let { device ->
+                bluetoothGatt = device.connectGatt(this, false, gattCallback)
+            }
+        }
+
+        private val gattCallback = object : BluetoothGattCallback() {
+
+            override fun onConnectionStateChange(
+                gatt: BluetoothGatt,
+                status: Int,
+                newState: Int
+            ) {
+
+                Log.d("BLE", "status=$status newState=$newState")
+
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    Log.d("BLE", "Ошибка подключения, статус = $status")
+                    runOnUiThread {
+                        statusText.text = "Ошибка подключения: $status"
+                    }
+                    gatt.close()
+                    return
+                }
+
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+
+                    Log.d("BLE", "Подключено к CGM")
+
+                    runOnUiThread {
+                        statusText.text = "Подключено к CGM"
+                    }
+
+                    gatt.discoverServices()
+
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+
+                    Log.d("BLE", "Отключено")
+
+                    runOnUiThread {
+                        statusText.text = "Отключено"
+                    }
+                }
+            }
+
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    Log.d("BLE", "Ошибка поиска сервисов: $status")
+                    return
+                }
+
+                Log.d("BLE", "===== СПИСОК СЕРВИСОВ =====")
+
+                for (service in gatt.services) {
+                    Log.d("BLE", "Service UUID: ${service.uuid}")
+
+                    for (characteristic in service.characteristics) {
+                        Log.d("BLE", "  └─ Characteristic UUID: ${characteristic.uuid}")
+                    }
+                }
+            }
         }
     }
 
-}
+
+
