@@ -233,25 +233,52 @@ class MainActivity : AppCompatActivity() {
             characteristic: BluetoothGattCharacteristic
         ) {
 
-            if (characteristic.uuid == CGM_MEASUREMENT_UUID) {
+            val data = characteristic.value
 
-                val data = characteristic.value
+            if (data.isEmpty()) return
 
-                Log.d("BLE", "Получены данные: ${data.joinToString()}")
+            val packetSize = data[0].toInt() and 0xFF
+            val flags = data[1].toInt() and 0xFF
 
-                runOnUiThread {
-                    statusText.text =
-                        "Данные: ${data.joinToString()}"
+            val currentRaw =
+                (data[2].toInt() and 0xFF) or
+                        ((data[3].toInt() and 0xFF) shl 8)
+
+            val timeOffset =
+                (data[4].toInt() and 0xFF) or
+                        ((data[5].toInt() and 0xFF) shl 8)
+
+            val tempRaw =
+                (data[6].toInt() and 0xFF) or
+                        ((data[7].toInt() and 0xFF) shl 8)
+
+            val currentNA = decodeSFloat(currentRaw)
+            val temperature = decodeSFloat(tempRaw)
+
+            var alertText = "Нет"
+
+            if (packetSize > 8) {
+                val alert = data[8].toInt() and 0xFF
+                alertText = when (alert) {
+                    0x01 -> "LOW LEVEL"
+                    0x02 -> "HIGH LEVEL"
+                    else -> "UNKNOWN"
                 }
             }
-        }
 
-        override fun onCharacteristicWrite(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            status: Int
-        ) {
-            Log.d("BLE", "onCharacteristicWrite status=$status")
+            Log.d("BLE", """
+        Размер: $packetSize
+        Флаги: $flags
+        Ток датчика: $currentNA nA
+        Time offset: $timeOffset мин
+        Температура: $temperature °C
+        Alert: $alertText
+    """.trimIndent())
+
+            runOnUiThread {
+                statusText.text =
+                    "nA: $currentNA\nTemp: $temperature\nAlert: $alertText"
+            }
         }
     }
 
@@ -278,6 +305,19 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == 100) {
             startScan()
         }
+    }
+    private fun decodeSFloat(value: Int): Float {
+        val mantissa = value and 0x0FFF
+        val exponent = value shr 12
+
+        val signedMantissa =
+            if (mantissa >= 0x0800) mantissa - 0x1000 else mantissa
+
+        val signedExponent =
+            if (exponent >= 0x0008) exponent - 0x0010 else exponent
+
+        return (signedMantissa *
+                Math.pow(10.0, signedExponent.toDouble())).toFloat()
     }
 }
 
