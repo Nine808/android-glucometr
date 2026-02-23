@@ -182,8 +182,49 @@ class MainActivity : AppCompatActivity() {
         ) {
             Log.d("BLE", "onDescriptorWrite status=$status")
 
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d("BLE", "Notify успешно включён")
+            if (status != BluetoothGatt.GATT_SUCCESS) return
+
+            val characteristic = descriptor.characteristic
+
+            if (characteristic.uuid == CGM_MEASUREMENT_UUID) {
+
+                Log.d("BLE", "Measurement notify включён, включаем RACP indicate")
+
+                val cgmService = gatt.getService(CGM_SERVICE_UUID)
+                val racpChar = cgmService?.getCharacteristic(
+                    UUID.fromString("00002aac-0000-1000-8000-00805f9b34fb")
+                )
+
+                if (racpChar != null) {
+
+                    gatt.setCharacteristicNotification(racpChar, true)
+
+                    val racpDescriptor =
+                        racpChar.getDescriptor(CCCD_UUID)
+
+                    racpDescriptor.value =
+                        BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+
+                    gatt.writeDescriptor(racpDescriptor)
+                }
+            }
+
+            else if (characteristic.uuid.toString()
+                    .equals("00002aac-0000-1000-8000-00805f9b34fb", true)
+            ) {
+
+                Log.d("BLE", "RACP indicate включён, отправляем команду")
+
+                val cgmService = gatt.getService(CGM_SERVICE_UUID)
+                val racpChar = cgmService?.getCharacteristic(
+                    UUID.fromString("00002aac-0000-1000-8000-00805f9b34fb")
+                )
+
+                val command = byteArrayOf(0x01, 0x01)
+                racpChar?.value = command
+                racpChar?.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+
+                gatt.writeCharacteristic(racpChar)
             }
         }
 
@@ -203,6 +244,14 @@ class MainActivity : AppCompatActivity() {
                         "Данные: ${data.joinToString()}"
                 }
             }
+        }
+
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            Log.d("BLE", "onCharacteristicWrite status=$status")
         }
     }
 
