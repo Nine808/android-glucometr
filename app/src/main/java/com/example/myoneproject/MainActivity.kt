@@ -8,7 +8,6 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -25,6 +24,9 @@ class MainActivity : AppCompatActivity() {
     private var bluetoothGatt: BluetoothGatt? = null
     private var cgmDevice: BluetoothDevice? = null
 
+    // 📦 Список всех измерений
+    private val measurements = mutableListOf<GlucoseMeasurement>()
+
     private val CGM_SERVICE_UUID =
         UUID.fromString("0000181f-0000-1000-8000-00805f9b34fb")
 
@@ -34,11 +36,23 @@ class MainActivity : AppCompatActivity() {
     private val CCCD_UUID =
         UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
+    // -------------------- DATA MODEL --------------------
+
+    data class GlucoseMeasurement(
+        val packetSize: Int,
+        val flags: Int,
+        val currentNA: Float,
+        val temperature: Float,
+        val timeOffset: Int,
+        val alert: String?,
+        val timestamp: Long
+    )
+
+    // -------------------- ACTIVITY --------------------
+
     private val enableBluetoothLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            if (it.resultCode == RESULT_OK) {
-                startScan()
-            }
+            if (it.resultCode == RESULT_OK) startScan()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,10 +83,7 @@ class MainActivity : AppCompatActivity() {
             val device = result.device
             val name = device.name ?: return
 
-            Log.d("BLE", "Найдено: $name ${device.address}")
-
             if (name.contains("MyCGM")) {
-                Log.d("BLE", "Это наш CGM!")
                 cgmDevice = device
                 bleScanner.stopScan(this)
                 connectToDevice()
@@ -93,14 +104,11 @@ class MainActivity : AppCompatActivity() {
 
         bleScanner = bluetoothAdapter.bluetoothLeScanner
         bleScanner.startScan(scanCallback)
-
-        Log.d("BLE", "Сканирование запущено")
     }
 
     // -------------------- CONNECT --------------------
 
     private fun connectToDevice() {
-
         if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
             != PackageManager.PERMISSION_GRANTED
         ) return
@@ -119,111 +127,27 @@ class MainActivity : AppCompatActivity() {
             status: Int,
             newState: Int
         ) {
-
-            Log.d("BLE", "status=$status newState=$newState")
-
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 gatt.close()
                 return
             }
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.d("BLE", "Подключено")
                 gatt.discoverServices()
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-
-            Log.d("BLE", "Services discovered status=$status")
-
             if (status != BluetoothGatt.GATT_SUCCESS) return
 
-            val cgmService = gatt.getService(CGM_SERVICE_UUID)
-            if (cgmService == null) {
-                Log.d("BLE", "CGM сервис не найден")
-                return
-            }
+            val service = gatt.getService(CGM_SERVICE_UUID) ?: return
+            val measurementChar = service.getCharacteristic(CGM_MEASUREMENT_UUID) ?: return
 
-            Log.d("BLE", "CGM сервис найден")
+            gatt.setCharacteristicNotification(measurementChar, true)
 
-            val measurementChar =
-                cgmService.getCharacteristic(CGM_MEASUREMENT_UUID)
-
-            if (measurementChar == null) {
-                Log.d("BLE", "CGM Measurement не найден")
-                return
-            }
-
-            Log.d("BLE", "CGM Measurement найден")
-
-            if (measurementChar.properties and
-                BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0
-            ) {
-
-                gatt.setCharacteristicNotification(measurementChar, true)
-
-                val descriptor =
-                    measurementChar.getDescriptor(CCCD_UUID)
-
-                descriptor.value =
-                    BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-
-                gatt.writeDescriptor(descriptor)
-
-                Log.d("BLE", "Включаем Notify")
-            }
-        }
-
-        override fun onDescriptorWrite(
-            gatt: BluetoothGatt,
-            descriptor: BluetoothGattDescriptor,
-            status: Int
-        ) {
-            Log.d("BLE", "onDescriptorWrite status=$status")
-
-            if (status != BluetoothGatt.GATT_SUCCESS) return
-
-            val characteristic = descriptor.characteristic
-
-            if (characteristic.uuid == CGM_MEASUREMENT_UUID) {
-
-                Log.d("BLE", "Measurement notify включён, включаем RACP indicate")
-
-                val cgmService = gatt.getService(CGM_SERVICE_UUID)
-                val racpChar = cgmService?.getCharacteristic(
-                    UUID.fromString("00002aac-0000-1000-8000-00805f9b34fb")
-                )
-
-                if (racpChar != null) {
-
-                    gatt.setCharacteristicNotification(racpChar, true)
-
-                    val racpDescriptor =
-                        racpChar.getDescriptor(CCCD_UUID)
-
-                    racpDescriptor.value =
-                        BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-
-                    gatt.writeDescriptor(racpDescriptor)
-                }
-            } else if (characteristic.uuid.toString()
-                    .equals("00002aac-0000-1000-8000-00805f9b34fb", true)
-            ) {
-
-                Log.d("BLE", "RACP indicate включён, отправляем команду")
-
-                val cgmService = gatt.getService(CGM_SERVICE_UUID)
-                val racpChar = cgmService?.getCharacteristic(
-                    UUID.fromString("00002aac-0000-1000-8000-00805f9b34fb")
-                )
-
-                val command = byteArrayOf(0x01, 0x01)
-                racpChar?.value = command
-                racpChar?.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-
-                gatt.writeCharacteristic(racpChar)
-            }
+            val descriptor = measurementChar.getDescriptor(CCCD_UUID)
+            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            gatt.writeDescriptor(descriptor)
         }
 
         override fun onCharacteristicChanged(
@@ -231,19 +155,10 @@ class MainActivity : AppCompatActivity() {
             characteristic: BluetoothGattCharacteristic
         ) {
 
+            if (characteristic.uuid != CGM_MEASUREMENT_UUID) return
+
             val data = characteristic.value
-
-            // 🔴 1. Проверяем UUID
-            if (characteristic.uuid != CGM_MEASUREMENT_UUID) {
-                Log.d("BLE", "Пришёл не Measurement (${characteristic.uuid}), пропускаем")
-                return
-            }
-
-            // 🔴 2. Проверяем минимальный размер пакета
-            if (data.size < 8) {
-                Log.d("BLE", "Слишком короткий пакет: ${data.size}")
-                return
-            }
+            if (data.size < 8) return
 
             val packetSize = data[0].toInt() and 0xFF
             val flags = data[1].toInt() and 0xFF
@@ -263,40 +178,66 @@ class MainActivity : AppCompatActivity() {
             val currentNA = decodeSFloat(currentRaw)
             val temperature = decodeSFloat(tempRaw)
 
-            var alertText = "Нет"
-
-            // 🔴 3. Проверяем реальную длину массива, а не packetSize
+            var alert: String? = null
             if (data.size > 8) {
-                val alert = data[8].toInt() and 0xFF
-                alertText = when (alert) {
+                alert = when (data[8].toInt() and 0xFF) {
                     0x01 -> "LOW LEVEL"
                     0x02 -> "HIGH LEVEL"
                     else -> "UNKNOWN"
                 }
             }
 
-            Log.d(
-                "BLE", """
-        Размер: $packetSize
-        Флаги: $flags
-        Ток датчика: $currentNA nA
-        Time offset: $timeOffset мин
-        Температура: $temperature °C
-        Alert: $alertText
-    """.trimIndent()
+            val measurement = GlucoseMeasurement(
+                packetSize = packetSize,
+                flags = flags,
+                currentNA = currentNA,
+                temperature = temperature,
+                timeOffset = timeOffset,
+                alert = alert,
+                timestamp = System.currentTimeMillis()
             )
 
-            runOnUiThread {
-                statusText.text = """
-        Размер: $packetSize
-        Флаги: $flags
-        Ток: $currentNA nA
-        Offset: $timeOffset мин
-        Temp: $temperature °C
-        Alert: $alertText
-    """.trimIndent()
-            }
+            saveMeasurement(measurement)
+            updateUi(measurement)
         }
+    }
+
+    // -------------------- STORAGE --------------------
+
+    private fun saveMeasurement(measurement: GlucoseMeasurement) {
+        measurements.add(measurement)
+        Log.d("BLE", "Всего сохранено измерений: ${measurements.size}")
+    }
+
+    // -------------------- UI --------------------
+
+    private fun updateUi(measurement: GlucoseMeasurement) {
+        runOnUiThread {
+            statusText.text = """
+                Размер: ${measurement.packetSize}
+                Флаги: ${measurement.flags}
+                Ток: ${measurement.currentNA} nA
+                Offset: ${measurement.timeOffset} мин
+                Temp: ${measurement.temperature} °C
+                Alert: ${measurement.alert}
+            """.trimIndent()
+        }
+    }
+
+    // -------------------- UTILS --------------------
+
+    private fun decodeSFloat(value: Int): Float {
+        val mantissa = value and 0x0FFF
+        val exponent = value shr 12
+
+        val signedMantissa =
+            if (mantissa >= 0x0800) mantissa - 0x1000 else mantissa
+
+        val signedExponent =
+            if (exponent >= 0x0008) exponent - 0x0010 else exponent
+
+        return (signedMantissa *
+                Math.pow(10.0, signedExponent.toDouble())).toFloat()
     }
 
     // -------------------- PERMISSIONS --------------------
@@ -317,24 +258,7 @@ class MainActivity : AppCompatActivity() {
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-
-        if (requestCode == 100) {
-            startScan()
-        }
-    }
-    private fun decodeSFloat(value: Int): Float {
-        val mantissa = value and 0x0FFF
-        val exponent = value shr 12
-
-        val signedMantissa =
-            if (mantissa >= 0x0800) mantissa - 0x1000 else mantissa
-
-        val signedExponent =
-            if (exponent >= 0x0008) exponent - 0x0010 else exponent
-
-        return (signedMantissa *
-                Math.pow(10.0, signedExponent.toDouble())).toFloat()
+        if (requestCode == 100) startScan()
     }
 }
 
