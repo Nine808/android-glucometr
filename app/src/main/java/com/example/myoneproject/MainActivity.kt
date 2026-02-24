@@ -207,9 +207,7 @@ class MainActivity : AppCompatActivity() {
 
                     gatt.writeDescriptor(racpDescriptor)
                 }
-            }
-
-            else if (characteristic.uuid.toString()
+            } else if (characteristic.uuid.toString()
                     .equals("00002aac-0000-1000-8000-00805f9b34fb", true)
             ) {
 
@@ -235,7 +233,17 @@ class MainActivity : AppCompatActivity() {
 
             val data = characteristic.value
 
-            if (data.isEmpty()) return
+            // 🔴 1. Проверяем UUID
+            if (characteristic.uuid != CGM_MEASUREMENT_UUID) {
+                Log.d("BLE", "Пришёл не Measurement (${characteristic.uuid}), пропускаем")
+                return
+            }
+
+            // 🔴 2. Проверяем минимальный размер пакета
+            if (data.size < 8) {
+                Log.d("BLE", "Слишком короткий пакет: ${data.size}")
+                return
+            }
 
             val packetSize = data[0].toInt() and 0xFF
             val flags = data[1].toInt() and 0xFF
@@ -257,7 +265,8 @@ class MainActivity : AppCompatActivity() {
 
             var alertText = "Нет"
 
-            if (packetSize > 8) {
+            // 🔴 3. Проверяем реальную длину массива, а не packetSize
+            if (data.size > 8) {
                 val alert = data[8].toInt() and 0xFF
                 alertText = when (alert) {
                     0x01 -> "LOW LEVEL"
@@ -266,18 +275,26 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            Log.d("BLE", """
+            Log.d(
+                "BLE", """
         Размер: $packetSize
         Флаги: $flags
         Ток датчика: $currentNA nA
         Time offset: $timeOffset мин
         Температура: $temperature °C
         Alert: $alertText
-    """.trimIndent())
+    """.trimIndent()
+            )
 
             runOnUiThread {
-                statusText.text =
-                    "nA: $currentNA\nTemp: $temperature\nAlert: $alertText"
+                statusText.text = """
+        Размер: $packetSize
+        Флаги: $flags
+        Ток: $currentNA nA
+        Offset: $timeOffset мин
+        Temp: $temperature °C
+        Alert: $alertText
+    """.trimIndent()
             }
         }
     }
