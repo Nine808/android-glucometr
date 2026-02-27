@@ -20,7 +20,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private lateinit var bleScanner: BluetoothLeScanner
     private lateinit var statusText: TextView
-
+    private var isReconnecting = false
+    private val reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val CGM_RACP_UUID =
+        UUID.fromString("00002aac-0000-1000-8000-00805f9b34fb")
     private var bluetoothGatt: BluetoothGatt? = null
     private var cgmDevice: BluetoothDevice? = null
 
@@ -127,13 +130,30 @@ class MainActivity : AppCompatActivity() {
             status: Int,
             newState: Int
         ) {
+
+            Log.d("BLE", "status=$status newState=$newState")
+
             if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.d("BLE", "Ошибка соединения, закрываем GATT")
                 gatt.close()
+                scheduleReconnect()
                 return
             }
 
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                gatt.discoverServices()
+            when (newState) {
+
+                BluetoothProfile.STATE_CONNECTED -> {
+                    Log.d("BLE", "Подключено")
+                    isReconnecting = false
+                    bluetoothGatt = gatt
+                    gatt.discoverServices()
+                }
+
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    Log.d("BLE", "Отключено")
+                    gatt.close()
+                    scheduleReconnect()
+                }
             }
         }
 
@@ -148,6 +168,50 @@ class MainActivity : AppCompatActivity() {
             val descriptor = measurementChar.getDescriptor(CCCD_UUID)
             descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             gatt.writeDescriptor(descriptor)
+        }
+
+        override fun onDescriptorWrite(
+            gatt: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int
+        ) {
+
+            if (status != BluetoothGatt.GATT_SUCCESS) return
+
+            val characteristic = descriptor.characteristic
+
+            // 1️⃣ После включения Measurement
+            if (characteristic.uuid == CGM_MEASUREMENT_UUID) {
+
+                Log.d("BLE", "Measurement включён → включаем RACP")
+
+                val service = gatt.getService(CGM_SERVICE_UUID) ?: return
+                val racpChar = service.getCharacteristic(CGM_RACP_UUID) ?: return
+
+                gatt.setCharacteristicNotification(racpChar, true)
+
+                val racpDescriptor = racpChar.getDescriptor(CCCD_UUID) ?: return
+                racpDescriptor.value =
+                    BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+
+                gatt.writeDescriptor(racpDescriptor)
+            }
+
+            // 2️⃣ После включения RACP
+            else if (characteristic.uuid == CGM_RACP_UUID) {
+
+                Log.d("BLE", "RACP включён → отправляем команду")
+
+                val service = gatt.getService(CGM_SERVICE_UUID) ?: return
+                val racpChar = service.getCharacteristic(CGM_RACP_UUID) ?: return
+
+                val command = byteArrayOf(0x01, 0x01)
+
+                racpChar.value = command
+                racpChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+
+                gatt.writeCharacteristic(racpChar)
+            }
         }
 
         override fun onCharacteristicChanged(
@@ -200,6 +264,25 @@ class MainActivity : AppCompatActivity() {
             saveMeasurement(measurement)
             updateUi(measurement)
         }
+    }
+    private fun scheduleReconnect() {
+
+        if (isReconnecting) return
+
+        isReconnecting = true
+
+        Log.d("BLE", "Пробуем переподключиться через 3 секунды...")
+
+        reconnectHandler.postDelayed({
+
+            if (cgmDevice != null) {
+                connectToDevice()
+            } else {
+                Log.d("BLE", "Устройство не найдено, запускаем сканирование")
+                startScan()
+            }
+
+        }, 3000)
     }
 
     // -------------------- STORAGE --------------------
